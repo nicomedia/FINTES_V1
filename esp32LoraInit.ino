@@ -1,251 +1,178 @@
+#include "gps.h"
+//#include "lis3dh.h"
 #include "types.h"
-#include "TinyGPSPlus.h";
-#include "HardwareSerial.h";
-#include "lis3dh-motion-detection.h"
-#include "Wire.h"
-#include <lmic.h>
-#include <hal/hal.h>
-#include <SPI.h>
+#include "lora.h"
 
-// Accelerometer provides different Power modes by changing output bit resolution
-//#define LOW_POWER
-#define NORMAL_MODE
-//#define HIGH_RESOLUTION
 
-// Enable Serial debbug on Serial UART to see registers wrote
-#define LIS3DH_DEBUG Serial
+#include <WiFi.h>
+#include <BluetoothSerial.h>
+#include "driver/adc.h"
+#include <esp_bt.h>
+#include <esp_wifi.h>
+#include <esp_sleep.h>
 
-uint16_t sampleRate = 1;  // HZ - Samples per second - 1, 10, 25, 50, 100, 200, 400, 1600, 5000
-uint8_t accelRange = 2;   // Accelerometer range = 2, 4, 8, 16g
+#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  5        /* Time ESP32 will go to sleep (in seconds) */
 
-uint16_t errorsAndWarnings = 0;
+RTC_DATA_ATTR int bootCount = 0;
 
-LIS3DH myIMU(0x19); //Default address is 0x19.
 /*
-   This sample sketch demonstrates the normal use of a TinyGPSPlus (TinyGPSPlus) object.
-   It requires the use of SoftwareSerial, and assumes that you have a
-   4800-baud serial GPS device hooked up on pins 4(rx) and 3(tx).
+Method to print the reason by which ESP32
+has been awaken from sleep
 */
-static const int RXPin = 16, TXPin = 17;
-static const uint32_t GPSBaud = 9600;
+void print_wakeup_reason(){
+  esp_sleep_wakeup_cause_t wakeup_reason;
 
-// The TinyGPSPlus object
-TinyGPSPlus gps;
+  wakeup_reason = esp_sleep_get_wakeup_cause();
 
-// The serial connection to the GPS device
-HardwareSerial SerialGPS(1);
-
-
-// LoRaWAN NwkSKey, network session key
-// This should be in big-endian (aka msb).
-static const PROGMEM u1_t NWKSKEY[16] = { 0x1C, 0x1D, 0x88, 0x76, 0x80, 0xED, 0x9E, 0x9A, 0x68, 0xF4, 0x73, 0xE4, 0x7B, 0x8C, 0x8F, 0xBC };
-
-// LoRaWAN AppSKey, application session key
-// This should also be in big-endian (aka msb).
-static const u1_t PROGMEM APPSKEY[16] = { 0xEB, 0x41, 0xBB, 0x30, 0xA0, 0x86, 0x5A, 0xAA, 0x71, 0x23, 0xCE, 0xFD, 0x93, 0xAB, 0x42, 0xB4 };
-
-// LoRaWAN end-device address (DevAddr)
-// See http://thethingsnetwork.org/wiki/AddressSpace
-// The library converts the address to network byte order as needed, so this should be in big-endian (aka msb) too.
-static const u4_t DEVADDR = 0x260B5B87 ; // <-- Change this address for every node!
-
-// These callbacks are only used in over-the-air activation, so they are
-// left empty here (we cannot leave them out completely unless
-// DISABLE_JOIN is set in arduino-lmic/project_config/lmic_project_config.h,
-// otherwise the linker will complain).
-void os_getArtEui (u1_t* buf) { }
-void os_getDevEui (u1_t* buf) { }
-void os_getDevKey (u1_t* buf) { }
-
-static uint8_t mydata[] = "Hello, world!";
-static osjob_t sendjob;
-
-// Schedule TX every this many seconds (might become longer due to duty
-// cycle limitations).
-const unsigned TX_INTERVAL = 20;
-
-// Pin mapping
-// Adapted for Feather M0 per p.10 of [feather]
-const lmic_pinmap lmic_pins = {
-    .nss = 18,                       // chip select on feather (rf95module) CS
-    .rxtx = LMIC_UNUSED_PIN,
-    .rst = 14,                       // reset pin
-    .dio = {26, 33, 32}, // assumes external jumpers [feather_lora_jumper]
-                                    // DIO1 is on JP1-1: is io1 - we connect to GPO6
-                                    // DIO1 is on JP5-3: is D2 - we connect to GPO5
-};
-
-void onEvent (ev_t ev) {
-    Serial.print(os_getTime());
-    Serial.print(": ");
-    switch(ev) {
-        case EV_SCAN_TIMEOUT:
-            Serial.println(F("EV_SCAN_TIMEOUT"));
-            break;
-        case EV_BEACON_FOUND:
-            Serial.println(F("EV_BEACON_FOUND"));
-            break;
-        case EV_BEACON_MISSED:
-            Serial.println(F("EV_BEACON_MISSED"));
-            break;
-        case EV_BEACON_TRACKED:
-            Serial.println(F("EV_BEACON_TRACKED"));
-            break;
-        case EV_JOINING:
-            Serial.println(F("EV_JOINING"));
-            break;
-        case EV_JOINED:
-            Serial.println(F("EV_JOINED"));
-            break;
-        /*
-        || This event is defined but not used in the code. No
-        || point in wasting codespace on it.
-        ||
-        || case EV_RFU1:
-        ||     Serial.println(F("EV_RFU1"));
-        ||     break;
-        */
-        case EV_JOIN_FAILED:
-            Serial.println(F("EV_JOIN_FAILED"));
-            break;
-        case EV_REJOIN_FAILED:
-            Serial.println(F("EV_REJOIN_FAILED"));
-            break;
-        case EV_TXCOMPLETE:
-            Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
-            if (LMIC.txrxFlags & TXRX_ACK)
-              Serial.println(F("Received ack"));
-            if (LMIC.dataLen) {
-              Serial.println(F("Received "));
-              Serial.println(LMIC.dataLen);
-              Serial.println(F(" bytes of payload"));
-            }
-            // Schedule next transmission
-            os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
-            break;
-        case EV_LOST_TSYNC:
-            Serial.println(F("EV_LOST_TSYNC"));
-            break;
-        case EV_RESET:
-            Serial.println(F("EV_RESET"));
-            break;
-        case EV_RXCOMPLETE:
-            // data received in ping slot
-            Serial.println(F("EV_RXCOMPLETE"));
-            break;
-        case EV_LINK_DEAD:
-            Serial.println(F("EV_LINK_DEAD"));
-            break;
-        case EV_LINK_ALIVE:
-            Serial.println(F("EV_LINK_ALIVE"));
-            break;
-        /*
-        || This event is defined but not used in the code. No
-        || point in wasting codespace on it.
-        ||
-        || case EV_SCAN_FOUND:
-        ||    Serial.println(F("EV_SCAN_FOUND"));
-        ||    break;
-        */
-        case EV_TXSTART:
-            Serial.println(F("EV_TXSTART"));
-            break;
-        case EV_TXCANCELED:
-            Serial.println(F("EV_TXCANCELED"));
-            break;
-        case EV_RXSTART:
-            /* do not print anything -- it wrecks timing */
-            break;
-        case EV_JOIN_TXCOMPLETE:
-            Serial.println(F("EV_JOIN_TXCOMPLETE: no JoinAccept"));
-            break;
-        default:
-            Serial.print(F("Unknown event: "));
-            Serial.println((unsigned) ev);
-            break;
-    }
+  switch(wakeup_reason)
+  {
+    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
+    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
+    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
+    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
+    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+  }
 }
 
-struct loraMsg
-{
-  uint16_t CowID;
-  uint8_t packetNo;
-  float gpsLat;
-  float gpsLong;
-  float ACC_X;
-  float ACC_Y;
-  float ACC_Z;
-}__attribute__((packed, aligned(1)));
-
-struct loraMsg loraData;
-
-
-uint8_t msgArray[255];
-
-uint8_t packet_no = 0;
-void do_send(osjob_t* j){
-    // Check if there is not a current TX/RX job running
-    if (LMIC.opmode & OP_TXRXPEND) {
-        Serial.println(F("OP_TXRXPEND, not sending"));
-    } else {
-        // Prepare upstream data transmission at the next possible time.
-        //LMIC_setTxData2(1, mydata, sizeof(mydata)-1, 0);
-        
-        loraData.CowID = 3;
-        loraData.packetNo = packet_no;
-        packet_no++;
-        
-        memcpy(&msgArray[0], (uint8_t *)&loraData, sizeof(struct loraMsg));
-        LMIC_setTxData2(1, msgArray, sizeof(struct loraMsg), 0);
-        Serial.println(F("Packet queued"));
-    }
-    // Next TX is scheduled after TX_COMPLETE event.
+BluetoothSerial SerialBT;
+void disableWiFi(){
+    adc_power_off();
+    WiFi.disconnect(true);  // Disconnect from the network
+    WiFi.mode(WIFI_OFF);    // Switch WiFi off
+    Serial.println("");
+    Serial.println("WiFi disconnected!");
+}
+void disableBluetooth(){
+    // Quite unusefully, no relevable power consumption
+    btStop();
+    Serial.println("");
+    Serial.println("Bluetooth stop!");
+}
+ 
+void setModemSleep() {
+    disableWiFi();
+    disableBluetooth();
+    setCpuFrequencyMhz(40);
+    // Use this if 40Mhz is not supported
+    // setCpuFrequencyMhz(80);
 }
 
-
+#include "SparkFunLIS3DH.h"
+#include "Wire.h"
+LIS3DH myIMU(I2C_MODE, 0x19); //Alternate constructor for I2C
+uint32_t sampleNumber = 0; //Used to make CSV output row numbers
 void setup()
 {
+  setModemSleep();
   Serial.begin(115200); //Serial port of USB
-        SerialGPS.begin(9600, SERIAL_8N1, 16, 17);
+  SerialGPS.begin(9600, SERIAL_8N1, RXPin, TXPin);
 
-  Serial.println(F("DeviceExample.ino"));
-  Serial.println(F("A simple demonstration of TinyGPSPlus with an attached GPS module"));
-  Serial.print(F("Testing TinyGPSPlus library v. ")); Serial.println(TinyGPSPlus::libraryVersion());
-  Serial.println(F("by Mikal Hart"));
-  Serial.println();
+  //  // LMIC init
+     os_init();
+  //   // Reset the MAC state. Session and pending data transfers will be discarded.
+     LMIC_reset();
 
-  if( myIMU.begin(sampleRate, 1, 1, 1, accelRange) != 0 )
-  {
-    Serial.print("Failed to initialize IMU.\n");
-  }
-  else
-  {
-    Serial.print("IMU initialized.\n");
-  }
+  pinMode(13, INPUT);
+  //gpio_set_interrupt(13, GPIO_INTTYPE_EDGE_POS, int_signal_handler);
+
+
+
+   myIMU.settings.adcEnabled = 0;
+  //Note:  By also setting tempEnabled = 1, temperature data is available
+  //instead of ADC3 in.  Temperature *differences* can be read at a rate of
+  //1 degree C per unit of ADC3 data.
+  myIMU.settings.tempEnabled = 1;
+  myIMU.settings.accelSampleRate = 1;  //Hz.  Can be: 0,1,10,25,50,100,200,400,1600,5000 Hz
+  myIMU.settings.accelRange = 2;      //Max G force readable.  Can be: 2, 4, 8, 16
+  myIMU.settings.xAccelEnabled = 1;
+  myIMU.settings.yAccelEnabled = 1;
+  myIMU.settings.zAccelEnabled = 1;
+
+  //FIFO control settings
+  myIMU.settings.fifoEnabled = 1;
+  myIMU.settings.fifoThreshold = 30;  //Can be 0 to 32
+  myIMU.settings.fifoMode = 3;  //FIFO mode.
+  //fifoMode can be:
+  //  0 (Bypass mode, FIFO off)
+  //  1 (FIFO mode)
+  //  3 (FIFO until full)
+  //  4 (FIFO when trigger)
   
-  //Detection threshold can be from 1 to 127 and depends on the Range
-  //chosen above, change it and test accordingly to your application
-  //Duration = timeDur x Seconds / sampleRate
-  myIMU.intConf(INT_1, DET_MOVE, 13, 2);
-  myIMU.intConf(INT_2, DET_STOP, 13, 10, 1);  // also change the polarity to active-low, this will change both Interrupts behavior
+  //Call .begin() to configure the IMU (except for the fifo)
+  myIMU.begin();
 
-  uint8_t readData = 0;
+  Serial.print("Configuring FIFO with no error checking...");
+  myIMU.fifoBegin(); //Configure fifo
+  Serial.print("Done!\n");
+  
+  Serial.print("Clearing out the FIFO...");
+  myIMU.fifoClear();
+  Serial.print("Done!\n");
+  myIMU.fifoStartRec(); //cause fifo to start taking data (re-applies mode bits)
+  myIMU.fifoInterruptEnable();
 
-  // Confirm configuration:
-  myIMU.readRegister(&readData, LIS3DH_INT1_CFG);
-  myIMU.readRegister(&readData, LIS3DH_INT2_CFG);
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
+  //Print the wakeup reason for ESP32
+  print_wakeup_reason();
 
-  // Get the ID:
-  myIMU.readRegister(&readData, LIS3DH_WHO_AM_I);
-  Serial.print("Who am I? 0x");
-  Serial.println(readData, HEX);
+  /*
+  First we configure the wake up source
+  We set our ESP32 to wake up for an external trigger.
+  There are two types for ESP32, ext0 and ext1 .
+  ext0 uses RTC_IO to wakeup thus requires RTC peripherals
+  to be on while ext1 uses RTC Controller so doesnt need
+  peripherals to be powered on.
+  Note that using internal pullups/pulldowns also requires
+  RTC peripherals to be turned on.
+  */
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_13,1); //1 = High, 0 = Low
 
-  Serial.println("HELLOOOOOOO");
-  // LMIC init
+#if 0
+  /*
+  First we configure the wake up source
+  We set our ESP32 to wake up every 5 seconds
+  */
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
+  " Seconds");
+#endif
+  /*
+  Next we decide what all peripherals to shut down/keep on
+  By default, ESP32 will automatically power down the peripherals
+  not needed by the wakeup source, but if you want to be a poweruser
+  this is for you. Read in detail at the API docs
+  http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
+  Left the line commented as an example of how to configure peripherals.
+  The line below turns off all RTC peripherals in deep sleep.
+  */
+  //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+  //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
+
+  /*
+  Now that we have setup a wake cause and if needed setup the
+  peripherals state in deep sleep, we can now start going to
+  deep sleep.
+  In the case that no wake up sources were provided but deep
+  sleep was started, it will sleep forever unless hardware
+  reset occurs.
+  */
+  Serial.println("Going to sleep now");
+  delay(1000);
+  Serial.flush(); 
+  esp_deep_sleep_start();
+  Serial.println("This will never be printed");
+
+
+
+#if 0
+    // LMIC init
     os_init();
     // Reset the MAC state. Session and pending data transfers will be discarded.
     LMIC_reset();
-// If not running an AVR with PROGMEM, just use the arrays directly
+    // If not running an AVR with PROGMEM, just use the arrays directly
      uint8_t appskey[sizeof(APPSKEY)];
     uint8_t nwkskey[sizeof(NWKSKEY)];
     memcpy_P(appskey, APPSKEY, sizeof(APPSKEY));
@@ -273,114 +200,50 @@ void setup()
 
     // Start job
     do_send(&sendjob);
+#endif
 }
 
 void loop()
 {
-
+#if 0
   while (SerialGPS.available() >0) {
-       gps.encode(SerialGPS.read());
-    }
-
-    Serial.print("LAT=");  Serial.println(gps.location.lat(), 6);
-    Serial.print("LONG="); Serial.println(gps.location.lng(), 6);
-    Serial.print("ALT=");  Serial.println(gps.altitude.meters());
+      gps.encode(SerialGPS.read());
+  }
 
   loraData.gpsLat = gps.location.lat();
   loraData.gpsLong = gps.location.lng();
-  displayInfo();
 
-  int16_t dataHighres = 0;
+  os_runloop_once();
+#endif
 
-  if( myIMU.readRegisterInt16( &dataHighres, LIS3DH_OUT_X_L ) != 0 )
+
+
+
+
+  if ( digitalRead(13) == 1 )
   {
-    errorsAndWarnings++;
-  }
-  Serial.print(" Acceleration X RAW = ");
-  Serial.println(dataHighres);
-
-  if( myIMU.readRegisterInt16( &dataHighres, LIS3DH_OUT_Z_L ) != 0 )
+    //float temp;  //This is to hold read data
+  //uint16_t tempUnsigned;
+  //
+  while(( myIMU.fifoGetStatus() & 0x80 ) == 0) {};  //Wait for watermark
+  
+  //Now loop until FIFO is empty.
+  //If having problems with the fifo not restarting after reading data, use the watermark
+  //bits (b5 to b0) instead.
+  //while(( myIMU.fifoGetStatus() & 0x1F ) > 2) //This checks that there is only a couple entries left
+  while(( myIMU.fifoGetStatus() & 0x20 ) == 0) //This checks for the 'empty' flag
   {
-    errorsAndWarnings++;
+	  Serial.print(sampleNumber);
+	  Serial.print(",");
+	  Serial.print(myIMU.readFloatAccelX());
+	  Serial.print(",");
+	  Serial.print(myIMU.readFloatAccelY());
+	  Serial.print(",");
+	  Serial.print(myIMU.readFloatAccelZ());
+	  Serial.println();
+	  sampleNumber++;
   }
-  Serial.print(" Acceleration Z RAW = ");
-  Serial.println(dataHighres);
-
-  // Read accelerometer data in mg as Float
-  Serial.print(" Acceleration X float = ");
-  Serial.println( myIMU.axisAccel( X ), 4);
-
-  // Read accelerometer data in mg as Float
-  Serial.print(" Acceleration Y float = ");
-  Serial.println( myIMU.axisAccel( Y ), 4);
-
-  // Read accelerometer data in mg as Float
-  Serial.print(" Acceleration Z float = ");
-  Serial.println( myIMU.axisAccel( Z ), 4);
-
-  loraData.ACC_X = myIMU.axisAccel( X );
-  loraData.ACC_Y = myIMU.axisAccel( Y );
-  loraData.ACC_Z = myIMU.axisAccel( Z );
-
-    unsigned long now;
-    now = millis();
-    if ((now & 512) != 0) {
-      digitalWrite(13, HIGH);
-    }
-    else {
-      digitalWrite(13, LOW);
-    }
-
-    os_runloop_once();
+  }
 }
 
-void displayInfo()
-{
-  Serial.print(F("Location: ")); 
-  if (gps.location.isValid())
-  {
-    Serial.print(gps.location.lat(), 6);
-    Serial.print(F(","));
-    Serial.print(gps.location.lng(), 6);
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-  }
 
-  Serial.print(F("  Date/Time: "));
-  if (gps.date.isValid())
-  {
-    Serial.print(gps.date.month());
-    Serial.print(F("/"));
-    Serial.print(gps.date.day());
-    Serial.print(F("/"));
-    Serial.print(gps.date.year());
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-  }
-
-  Serial.print(F(" "));
-  if (gps.time.isValid())
-  {
-    if (gps.time.hour() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.hour());
-    Serial.print(F(":"));
-    if (gps.time.minute() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.minute());
-    Serial.print(F(":"));
-    if (gps.time.second() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.second());
-    Serial.print(F("."));
-    if (gps.time.centisecond() < 10) Serial.print(F("0"));
-    Serial.print(gps.time.centisecond());
-  }
-  else
-  {
-    Serial.print(F("INVALID"));
-  }
-
-  Serial.println();
-}
