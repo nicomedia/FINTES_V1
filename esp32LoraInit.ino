@@ -1,7 +1,7 @@
-#include "gps.h"
-//#include "lis3dh.h"
 #include "types.h"
 #include "lora.h"
+#include "lis3dh.h"
+#include "gps.h"
 
 
 #include <WiFi.h>
@@ -61,11 +61,7 @@ void setModemSleep() {
     // setCpuFrequencyMhz(80);
 }
 
-/*#include "SparkFunLIS3DH.h"
-#include "Wire.h"*/
-#include "lis3dh.h"
-//LIS3DH myIMU(I2C_MODE, 0x19); //Alternate constructor for I2C
-
+int loopCounter = 0;
 void setup()
 {
     while(1)
@@ -74,87 +70,43 @@ void setup()
       setModemSleep();
       Serial.begin(115200); //Serial port of USB
 
-      lis3DH_init();
-      if (bootCount != 0)
-      {
+      if (bootCount == 0)
+        lis3DH_init();  
+      else
         lis3DH_Read();
-      }
+      
       lis3DH_Fifo_Setup();
+      if(bootCount == 0)
+        lis3DH_Calibration();
       lis3DH_Interrupt_Enable();
 
-      Serial.println("GPS ON");
-      SerialGPS.begin(9600, SERIAL_8N1, RXPin, TXPin);
-      uint8_t GPSon[] = {0xB5, 0x62, 0x02, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x37};
-      SerialGPS.write(GPSon, sizeof(GPSon)/sizeof(uint8_t));
-
-      uint32_t gpsReadCnt = 0;
-      uint8_t read_ok = 0;
-      while (1)
+      
+      if (loopCounter%2 == 0)
       {
-        if (bootCount == 0)
-        {
-          if (gpsReadCnt > 300)
-          {
-            break;
-          }
-          while (SerialGPS.available() >0) {
-              gps.encode(SerialGPS.read());
-              read_ok = 1;       
-          }
-          if (read_ok)
-          {
-            loraData.gpsLat = gps.location.lat();
-            loraData.gpsLong = gps.location.lng();
+        SerialGPS.begin(9600, SERIAL_8N1, RXPin, TXPin);
 
-            Serial.println(loraData.gpsLat,6);
-            Serial.println(loraData.gpsLong,6);
-            if (loraData.gpsLat > 0 && loraData.gpsLong > 0)
-            {
-                Serial.println("must be valid");
-                break;
-            }
-          }
+        Serial.println("GPS ON");
+        gpsOn();
+
+        gpsLoop();
+        
+        Serial.println("GPS Off");
+        gpsOff();
+
+
+        if(bootCount == 0)
+        {
+          loraInit();
         }
         else
         {
-          if (gpsReadCnt > 100)
-          {
-            break;
-          }
-          while (SerialGPS.available() >0) {
-              gps.encode(SerialGPS.read());
-              read_ok = 1;       
-          }
-          if (read_ok)
-          {
-            loraData.gpsLat = gps.location.lat();
-            loraData.gpsLong = gps.location.lng();
-
-            Serial.println(loraData.gpsLat,6);
-            Serial.println(loraData.gpsLong,6);
-            if (loraData.gpsLat > 0 && loraData.gpsLong > 0)
-            {
-                Serial.println("must be valid");
-                break;
-            }
-          }
+          loraSend();
         }
-        delay(100);
-        gpsReadCnt++;
       }
-      Serial.println("GPS Off");
-      uint8_t GPSoff[] = {0xB5, 0x62, 0x02, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x4D, 0x3B};
-      SerialGPS.write(GPSoff, sizeof(GPSoff)/sizeof(uint8_t));
-      SerialGPS.flush();
-
-
-      if(bootCount == 0)
+      
+      if(bootCount >= 3)
       {
-        loraInit();
-      }
-      else
-      {
-        loraSend();
+        loopCounter++;
       }
       
 
@@ -163,24 +115,9 @@ void setup()
       //Print the wakeup reason for ESP32
       //print_wakeup_reason();
 
-      /*
-      First we configure the wake up source
-      We set our ESP32 to wake up for an external trigger.
-      There are two types for ESP32, ext0 and ext1 .
-      ext0 uses RTC_IO to wakeup thus requires RTC peripherals
-      to be on while ext1 uses RTC Controller so doesnt need
-      peripherals to be powered on.
-      Note that using internal pullups/pulldowns also requires
-      RTC peripherals to be turned on.
-      */
       esp_sleep_enable_ext0_wakeup(GPIO_NUM_13,1); //1 = High, 0 = Low
-
-      /* Serial.println("Going to sleep now");
-      delay(1000);
-      Serial.flush(); */
-      //esp_deep_sleep_start();
       esp_light_sleep_start();
-      //Serial.println("This will never be printed");
+
     }
 
 }

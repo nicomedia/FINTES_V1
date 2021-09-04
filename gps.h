@@ -9,4 +9,79 @@ TinyGPSPlus gps;
 
 // The serial connection to the GPS device
 HardwareSerial SerialGPS(1);
+extern RTC_DATA_ATTR int bootCount;
 
+
+void gpsOn(void)
+{
+    uint8_t GPSon[] = {0xB5, 0x62, 0x02, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x4C, 0x37};
+    SerialGPS.write(GPSon, sizeof(GPSon)/sizeof(uint8_t));
+}
+
+void gpsOff(void)
+{
+    uint8_t GPSoff[] = {0xB5, 0x62, 0x02, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x4D, 0x3B};
+    SerialGPS.write(GPSoff, sizeof(GPSoff)/sizeof(uint8_t));
+    SerialGPS.flush();
+}
+
+extern struct loraMsg loraData;
+void gpsLoop(void)
+{
+    uint32_t gpsReadCnt = 0;
+      uint8_t read_ok = 0;
+      while (1)
+      {
+        if (bootCount == 0)
+        {
+          if (gpsReadCnt > 3000)
+          {
+            break;
+          }
+          while (SerialGPS.available() >0) {
+              gps.encode(SerialGPS.read());
+              read_ok = 1;       
+          }
+          if (read_ok)
+          {
+            loraData.gpsLat = gps.location.lat();
+            loraData.gpsLong = gps.location.lng();
+
+            Serial.println(loraData.gpsLat,6);
+            Serial.println(loraData.gpsLong,6);
+            if (loraData.gpsLat > 0 && loraData.gpsLong > 0)
+            {
+                Serial.println("must be valid");
+                Serial.println(gpsReadCnt);
+                break;
+            }
+          }
+        }
+        else
+        {
+          if (gpsReadCnt > 100)
+          {
+            break;
+          }
+          while (SerialGPS.available() >0) {
+              gps.encode(SerialGPS.read());
+              read_ok = 1;       
+          }
+          if (read_ok)
+          {
+            loraData.gpsLat = gps.location.lat();
+            loraData.gpsLong = gps.location.lng();
+
+            Serial.println(loraData.gpsLat,6);
+            Serial.println(loraData.gpsLong,6);
+            if (loraData.gpsLat > 0 && loraData.gpsLong > 0)
+            {
+                Serial.println("must be valid");
+                break;
+            }
+          }
+        }
+        delay(100);
+        gpsReadCnt++;
+      }
+}

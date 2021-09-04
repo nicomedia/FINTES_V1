@@ -59,6 +59,10 @@ struct loraMsg loraData;
 
 uint8_t msgArray[255];
 
+extern float TotalX;
+extern float TotalY;
+extern float TotalZ;
+
 uint8_t packet_no = 0;
 void do_send(osjob_t* j){
     // Check if there is not a current TX/RX job running
@@ -71,9 +75,16 @@ void do_send(osjob_t* j){
         loraData.CowID = 3;
         loraData.packetNo = packet_no;
         packet_no++;
+        loraData.ACC_X = TotalX;
+        loraData.ACC_Y = TotalY;
+        loraData.ACC_Z = TotalZ;
+        TotalX = 0;
+        TotalY = 0;
+        TotalZ = 0;
         
         memcpy(&msgArray[0], (uint8_t *)&loraData, sizeof(struct loraMsg));
-        LMIC_setTxData2(1, msgArray, sizeof(struct loraMsg), 0);
+        msgArray[sizeof(struct loraMsg)] = 255;
+        LMIC_setTxData2(1, msgArray, sizeof(struct loraMsg) + 1, 0);
     //}
     // Next TX is scheduled after TX_COMPLETE event.
 }
