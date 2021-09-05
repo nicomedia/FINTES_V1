@@ -1,6 +1,9 @@
 #include "TinyGPSPlus.h"
 #include "HardwareSerial.h"
 
+#define GPS_COLD_START  3000 /* 5 minutes */
+#define GPS_WARM_START  200  /* 20 sencond */
+
 static const int RXPin = 16, TXPin = 17;
 static const uint32_t GPSBaud = 9600;
 
@@ -32,34 +35,8 @@ void gpsLoop(void)
       uint8_t read_ok = 0;
       while (1)
       {
-        if (bootCount == 0)
-        {
-          if (gpsReadCnt > 3000)
-          {
-            break;
-          }
-          while (SerialGPS.available() >0) {
-              gps.encode(SerialGPS.read());
-              read_ok = 1;       
-          }
-          if (read_ok)
-          {
-            loraData.gpsLat = gps.location.lat();
-            loraData.gpsLong = gps.location.lng();
 
-            Serial.println(loraData.gpsLat,6);
-            Serial.println(loraData.gpsLong,6);
-            if (loraData.gpsLat > 0 && loraData.gpsLong > 0)
-            {
-                Serial.println("must be valid");
-                Serial.println(gpsReadCnt);
-                break;
-            }
-          }
-        }
-        else
-        {
-          if (gpsReadCnt > 100)
+          if (gpsReadCnt > GPS_WARM_START)
           {
             break;
           }
@@ -80,7 +57,7 @@ void gpsLoop(void)
                 break;
             }
           }
-        }
+        
         delay(100);
         gpsReadCnt++;
       }

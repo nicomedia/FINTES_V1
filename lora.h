@@ -2,6 +2,8 @@
 #include <hal/hal.h>
 #include <SPI.h>
 
+#define COW_ID  1
+
 // LoRaWAN NwkSKey, network session key
 // This should be in big-endian (aka msb).
 static const PROGMEM u1_t NWKSKEY[16] = { 0x1C, 0x1D, 0x88, 0x76, 0x80, 0xED, 0x9E, 0x9A, 0x68, 0xF4, 0x73, 0xE4, 0x7B, 0x8C, 0x8F, 0xBC };
@@ -72,7 +74,7 @@ void do_send(osjob_t* j){
         // Prepare upstream data transmission at the next possible time.
         //LMIC_setTxData2(1, mydata, sizeof(mydata)-1, 0);
         
-        loraData.CowID = 3;
+        loraData.CowID = COW_ID;
         loraData.packetNo = packet_no;
         packet_no++;
         loraData.ACC_X = TotalX;
